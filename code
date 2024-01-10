@@ -1,0 +1,131 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Net.Http;
+
+namespace Lab9
+{
+    internal class Program
+    {
+        // Объявление объекта для блокировки при записи в файл
+        private static readonly object fileLock = new object();
+
+        static async Task Main(string[] args)
+        {
+            // Чтение тикеров акций из файла
+            List<string> tickers = ReadDataFromFile("C:\\Xiaomi\\lab9aya\\ticker.txt");
+
+            // Создание списка задач для обработки каждой акции асинхронно
+            List<Task> tasks = new List<Task>();
+
+            // Обработка каждой акции асинхронно
+            foreach (string ticker in tickers)
+            {
+                tasks.Add(ProcessStock(ticker));
+            }
+
+            // Ожидание завершения всех задач
+            await Task.WhenAll(tasks);
+        }
+
+        static async Task ProcessStock(string ticker)
+        {
+            // Определение временного интервала для получения данных об акции (последний год)
+            DateTime endDate = DateTime.Now;
+            DateTime startDate = endDate.AddYears(-1);
+            long startUnixTime = (long)(startDate.Subtract(new DateTime(1970, 1, 1))).TotalSeconds;
+            long endUnixTime = (long)(endDate.Subtract(new DateTime(1970, 1, 1))).TotalSeconds;
+
+            // Формирование URL для загрузки данных об акции
+            string API_URL = $"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1={startUnixTime}&period2={endUnixTime}&interval=1d&events=history&includeAdjustedClose=true";
+
+            try
+            {
+                // Загрузка данных о цене акции
+                var data = await DownloadStockPrice(API_URL);
+
+                // Вычисление средней цены акции
+                decimal average = 0;
+                if (data.Count > 0)
+                {
+                    average = data.Sum() / data.Count;
+                }
+
+                // Запись результата в файл
+                WriteToFile("C:\\Xiaomi\\lab9aya\\output.txt", $"{ticker}:{average}");
+            }
+            catch (HttpRequestException ex)
+            {
+                // Обработка исключения при ошибке HTTP-запроса
+                Console.WriteLine($"Ошибка загрузки данных об акции {ticker}: {ex.Message}");
+            }
+
+            // Задержка перед обработкой следующей акции
+            await Task.Delay(1000);
+        }
+
+        static async Task<List<int>> DownloadStockPrice(string url)
+        {
+            // Использование HttpClient для отправки HTTP-запроса
+            using (HttpClient client = new HttpClient())
+            {
+                // Добавление заголовка авторизации для предотвращения ошибки 401
+                client.DefaultRequestHeaders.Add("Authorization", "Bearer 5b46292ae01f2ba3b57add22869ad86ed5306bfe");
+
+                // Загрузка данных о цене акции в виде строки
+                string data = await client.GetStringAsync(url);
+                string[] lines = data.Split('\n');
+                List<int> prices = new List<int>();
+
+                foreach (string line in lines.Skip(1))
+                {
+                    // Разбор каждой строки данных и извлечение средней цены акции
+                    string[] columns = line.Split(',');
+
+                    try
+                    {
+                        int high = Int32.Parse(columns[2].Split('.')[0]);
+                        int low = Int32.Parse(columns[3].Split('.')[0]);
+                        int average = high + low / 2;
+                        prices.Add(average);
+                    }
+                    catch (FormatException ex)
+                    {
+                        // Обработка исключения при ошибке парсинга значений
+                        Console.WriteLine($"Ошибка при разборе значения: {ex.Message}");
+                    }
+                }
+
+                return prices;
+            }
+        }
+
+        private static List<string> ReadDataFromFile(string path)
+        {
+            // Чтение тикеров акций из файла
+            List<string> data = new List<string>();
+            if (File.Exists(path))
+            {
+                data.AddRange(File.ReadAllLines(path));
+            }
+            else
+            {
+                Console.WriteLine("Файл не существует");
+            }
+
+            return data;
+        }
+
+        private static void WriteToFile(string path, string data)
+        {
+            // Запись данных в файл с обеспечением потокобезопасности с использованием блокировки
+            lock (fileLock)
+            {
+                File.AppendAllText(path, data + '\n');
+            }
+        }
+    }
+}
